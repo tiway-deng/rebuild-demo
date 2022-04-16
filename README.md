@@ -1,233 +1,354 @@
-<p align="center">
-    <a href="https://github.com/yiisoft" target="_blank">
-        <img src="https://avatars0.githubusercontent.com/u/993323" height="100px">
-    </a>
-    <h1 align="center">Yii 2 Basic Project Template</h1>
-    <br>
-</p>
+最近一直在学习DDD相关内容，通过近几个月的学习也确实感觉到我们现有项目的一些缺陷。
 
-Yii 2 Basic Project Template is a skeleton [Yii 2](http://www.yiiframework.com/) application best for
-rapidly creating small projects.
-
-The template contains the basic features including user login/logout and a contact page.
-It includes all commonly used configurations that would allow you to focus on adding new
-features to your application.
-
-[![Latest Stable Version](https://img.shields.io/packagist/v/yiisoft/yii2-app-basic.svg)](https://packagist.org/packages/yiisoft/yii2-app-basic)
-[![Total Downloads](https://img.shields.io/packagist/dt/yiisoft/yii2-app-basic.svg)](https://packagist.org/packages/yiisoft/yii2-app-basic)
-[![build](https://github.com/yiisoft/yii2-app-basic/workflows/build/badge.svg)](https://github.com/yiisoft/yii2-app-basic/actions?query=workflow%3Abuild)
-
-DIRECTORY STRUCTURE
--------------------
-
-      assets/             contains assets definition
-      commands/           contains console commands (controllers)
-      config/             contains application configurations
-      controllers/        contains Web controller classes
-      mail/               contains view files for e-mails
-      models/             contains model classes
-      runtime/            contains files generated during runtime
-      tests/              contains various tests for the basic application
-      vendor/             contains dependent 3rd-party packages
-      views/              contains view files for the Web application
-      web/                contains the entry script and Web resources
-
-
-
-REQUIREMENTS
-------------
-
-The minimum requirement by this project template that your Web server supports PHP 5.6.0.
-
-
-INSTALLATION
-------------
-
-### Install via Composer
-
-If you do not have [Composer](http://getcomposer.org/), you may install it by following the instructions
-at [getcomposer.org](http://getcomposer.org/doc/00-intro.md#installation-nix).
-
-You can then install this project template using the following command:
-
-~~~
-composer create-project --prefer-dist yiisoft/yii2-app-basic basic
+### 项目介绍
+目前项目项目架构
+![在这里插入图片描述](https://img-blog.csdnimg.cn/62d78a0ce67a4c95ace10f13f2fb4a3b.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAdGl3YXlEZW5n,size_17,color_FFFFFF,t_70,g_se,x_16)
+项目框架：YII2
+1.在controller 层得到对应版本号映射对应的service,每个版本对应一个service
+~~~php
+public function __construct($id, $module, $config = [])
+    {
+        parent::__construct($id, $module, $config);
+        //获取对应service版本
+        $servicePath = 'myService';
+        $retServicePath = $this->getServiceVersion($servicePath);
+        //我的service
+        $this->service = new $retServicePath();
+    }
 ~~~
 
-Now you should be able to access the application through the following URL, assuming `basic` is the directory
-directly under the Web root.
+2.版本间共用方法通过commonService调用
+3.版本对应的service承载业务逻辑及数据查询
+~~~php
+namespace app\service\v1\v1_0_0\myService
+//...
+public function someThingCreate($params)
+    {
+        if (condition1) {
+            throw new BusinessException('condition1 不满足');
+        }
+        if (condition2) {
+            throw new BusinessException('condition2 不满足');
+        }
+        //...
+       //数据查询
+        $repositoryOne = OneRepository::getOne($condition);
+        if (!$repositoryOne) {
+            throw new BusinessException('找不到数据');
+        }
+        //....
+       
+        //开启事务
+        $transaction = \Yii::$app->db->beginTransaction();
+        try {
+            //添加two
+            $two= TwoRepository::create($params);
+			//添加three
+            $three= ThreeRepository::create($params);
+       
+            $transaction->commit();
+        } catch (\Throwable $e) {
+           //...
+        }
+    }
+~~~
+4.repository承载所有的对mysql 数据库的操作
+~~~php
+namespace app\repository\db\myRepository;
+
+public static function oneCreate($attributes)
+    {
+        $one= new one();
+        $one->setAttributes($attributes);
+        $one->save();
+        return $one;
+    }
+~~~
+5.model建立关联及验证相关关系
+~~~php
+class One extends \yii\db\ActiveRecord
+{
+    /**
+     * {@inheritdoc}
+     */
+    public static function tableName()
+    {
+        return 'One';
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function rules()
+    {
+        return [
+           //...
+        ];
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function attributeLabels()
+    {
+        return [
+            //...
+        ];
+    }
+    
+	public function getTwo()
+    {
+        return $this->hasOne(Two::class, ['id' => 'one_id']);
+    }
+
+}
+~~~
+#### 项目存在问题
+1.版本迭代需要同事修改历史版本的controller与新的controller，从controller层找到服务层只能找对应版本的目录service,不能通过IDE跳转,如下只能跳转到1.0.0的版本
+~~~php
+ use app\service\v1\v1_0_0\myService
+  /**
+     * @var myService
+     */
+    protected $service;
+~~~
+2.业务代码的清晰度不够
+- 对于历史版本的业务逻辑有些需要提升到commservice,什么时候提，谁来提，怎么知道要不要提
+- 存在大量commonService ，但没有针对每个commonService进行边界设定
+
+3.可测性
+- params参数具体定义；
+- 针对每个params的字段验证成倍数增长，即params[1]有m种，params[2]有n种。。。，则需要m*n*...测试成本巨大
+
+#### 解决方案
+我们将尝试应用DDD的思想来对我们的业务及架构进行梳理
+![在这里插入图片描述](https://img-blog.csdnimg.cn/43e3eebce2f34d87a904051c89ae6f26.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAdGl3YXlEZW5n,size_20,color_FFFFFF,t_70,g_se,x_16)
+
+从整体架构来说没有太大的变化，主要的变更变更包含
+1.controller与service跟随版本走
+2.把对应的use case 抽象成一个域对象，域对象包含行为和属性，域对象不直接依赖于数据库，通过interface repositorySpecification的注入查询数据对数据的验证与查询
+3.查询类的语句不封装在repository 直接在service层通过Repository调用查询
+
+我们用一个案例来解析说明，因涉及项目安全问题，已隐藏部分逻辑
+1.通过YII2 创建对应版本
+[模块化](https://www.yiichina.com/doc/guide/2.0/structure-modules)，
+[版本控制](https://www.yiichina.com/doc/guide/2.0/rest-versioning)，
+[语义版本化](https://semver.org/lang/zh-CN/)
+![在这里插入图片描述](https://img-blog.csdnimg.cn/f2709f027f1d4140912c566f9568f8f2.png)
+
+2.创建对应的Domain
+![在这里插入图片描述](https://img-blog.csdnimg.cn/fb1805949161458a9a91433e43ccfdb2.png?x-oss-process=image/watermark,type_d3F5LXplbmhlaQ,shadow_50,text_Q1NETiBAdGl3YXlEZW5n,size_14,color_FFFFFF,t_70,g_se,x_16)
+
+1.valueObject 将隐性的概念显性化，集中验证的重要的对象属性
+~~~php
+<?php
+namespace app\domain\activityCategory\valueObject;
+
+
+use app\helper\Assert;
+
+final class CategoryName
+{
+    private $name;
+
+    public static function fromString(string $param): self
+    {
+        Assert::stringNotEmpty($param, '%s 不能为空');
+        Assert::maxLength($param, 12,'%s 不能超过12个字符');
+
+        $CategoryName = new self();
+
+        $CategoryName->name = $param;
+
+        return $CategoryName;
+    }
+
+    public function toString(): string
+    {
+        return $this->name;
+    }
+
+    public function __toString(): string
+    {
+        return $this->name;
+    }
+
+    private function __construct()
+    {
+    }
+
+}
+~~~
+2.实体
+能够创建唯一标签的域对象，这些有标识的概念有长期存在的特性。无论概念中的数据发生多少次变化，它们的标识总是相同。区别于我们的我们表的数据映射，没有必然的直接的联系，比如activity 这个实体我实际可以分为activity   activity_content activity_address 等几个表
+~~~php
+<?php
+
+namespace app\domain\activityCategory;
+
+
+use app\domain\activityCategory\specification\CategorySpecificationInterface;
+use app\domain\activityCategory\valueObject\CategoryDescription;
+use app\domain\activityCategory\valueObject\CategoryName;
+use app\domain\activityCategory\valueObject\CategorySort;
+use app\helper\Assert;
+
+class ActivityCategory
+{
+    private $id;
+    private $name;
+    private $description;
+    private $sort;
+    private $created_at;
+    private $updated_at;
+
+    /**
+     * @return mixed
+     */
+    public function getId()
+    {
+        return $this->id;
+    }
+
+    /**
+     * @param mixed $id
+     */
+    public function setId($id): void
+    {
+        $this->id = $id;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getName()
+    {
+        return $this->name;
+    }
+
+    /**
+     * @param mixed $name
+     */
+    public function setName(string $name): void
+    {
+        $this->name = $name;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getDescription()
+    {
+        return $this->description;
+    }
+
+    /**
+     * @param mixed $description
+     */
+    public function setDescription(string $description): void
+    {
+        $this->description = $description;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getSort()
+    {
+        return $this->sort;
+    }
+
+    /**
+     * @param mixed $sort
+     */
+    public function setSort(string $sort): void
+    {
+        $this->sort = $sort;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getCreatedAt()
+    {
+        if (is_null($this->created_at)) {
+            $this->setCreatedAt(time());
+        }
+        return $this->created_at;
+    }
+
+    /**
+     * @param mixed $created_at
+     */
+    public function setCreatedAt($created_at): void
+    {
+        $this->created_at = $created_at;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getUpdatedAt()
+    {
+        if (is_null($this->updated_at)) {
+            $this->setUpdatedAt(time());
+        }
+        return $this->updated_at;
+    }
+
+
+    /**
+     * @param mixed $updated_at
+     */
+    public function setUpdatedAt($updated_at): void
+    {
+        $this->updated_at = $updated_at;
+    }
+
+    public static function create(
+        CategoryName $name,
+        CategoryDescription $categoryDescription,
+        CategorySort $sort,
+        CategorySpecificationInterface $specification
+    ): self
+    {
+        if($specification->isUniqueName($name)){
+            Assert::reportInvalidArgument('分类名称重复');
+        }
+
+        $category = new self();
+        $category->setName($name);
+        $category->setDescription($categoryDescription);
+        $category->setSort($sort);
+
+        return $category;
+    }
+
+}
+~~~
+3.specification
+实体不直接调用数据层，通过specificationInterface 来查询及验证对应的数据
+~~~php
+<?php
+namespace app\domain\activityCategory\specification;
+
+use app\domain\activityCategory\valueObject\CategoryId;
+use app\domain\activityCategory\valueObject\CategoryName;
+
+interface CategorySpecificationInterface
+{
+    public function isUniqueName(CategoryName $name): bool;
+    public function isCategoryExits(CategoryId $id): bool;
+
+}
+
 
 ~~~
-http://localhost/basic/web/
-~~~
-
-### Install from an Archive File
-
-Extract the archive file downloaded from [yiiframework.com](http://www.yiiframework.com/download/) to
-a directory named `basic` that is directly under the Web root.
-
-Set cookie validation key in `config/web.php` file to some random secret string:
-
-```php
-'request' => [
-    // !!! insert a secret key in the following (if it is empty) - this is required by cookie validation
-    'cookieValidationKey' => '<secret random string goes here>',
-],
-```
-
-You can then access the application through the following URL:
-
-~~~
-http://localhost/basic/web/
-~~~
 
 
-### Install with Docker
+#### 总结
+1.  以上是我们对于DDD的一些探索，确实解决了我们项目中的一些问题
+2.  未能完全应用DDD思想，如 实体对象保存（保存实体状态至数据库中最好的工具就是 Doctrine ORM，目前YII2自带ORM不能直接保存实体对象），领域事件等，如果全部需要全部应用DDD感觉需要转为symfony可能风险更小
+3. 目前只是在DDD战术思想上的应用，对于真正的理解仍需探索，需要整个团队共同努力
 
-Update your vendor packages
-
-    docker-compose run --rm php composer update --prefer-dist
-    
-Run the installation triggers (creating cookie validation code)
-
-    docker-compose run --rm php composer install    
-    
-Start the container
-
-    docker-compose up -d
-    
-You can then access the application through the following URL:
-
-    http://127.0.0.1:8000
-
-**NOTES:** 
-- Minimum required Docker engine version `17.04` for development (see [Performance tuning for volume mounts](https://docs.docker.com/docker-for-mac/osxfs-caching/))
-- The default configuration uses a host-volume in your home directory `.docker-composer` for composer caches
-
-
-CONFIGURATION
--------------
-
-### Database
-
-Edit the file `config/db.php` with real data, for example:
-
-```php
-return [
-    'class' => 'yii\db\Connection',
-    'dsn' => 'mysql:host=localhost;dbname=yii2basic',
-    'username' => 'root',
-    'password' => '1234',
-    'charset' => 'utf8',
-];
-```
-
-**NOTES:**
-- Yii won't create the database for you, this has to be done manually before you can access it.
-- Check and edit the other files in the `config/` directory to customize your application as required.
-- Refer to the README in the `tests` directory for information specific to basic application tests.
-
-
-TESTING
--------
-
-Tests are located in `tests` directory. They are developed with [Codeception PHP Testing Framework](http://codeception.com/).
-By default, there are 3 test suites:
-
-- `unit`
-- `functional`
-- `acceptance`
-
-Tests can be executed by running
-
-```
-vendor/bin/codecept run
-```
-
-The command above will execute unit and functional tests. Unit tests are testing the system components, while functional
-tests are for testing user interaction. Acceptance tests are disabled by default as they require additional setup since
-they perform testing in real browser. 
-
-
-### Running  acceptance tests
-
-To execute acceptance tests do the following:  
-
-1. Rename `tests/acceptance.suite.yml.example` to `tests/acceptance.suite.yml` to enable suite configuration
-
-2. Replace `codeception/base` package in `composer.json` with `codeception/codeception` to install full-featured
-   version of Codeception
-
-3. Update dependencies with Composer 
-
-    ```
-    composer update  
-    ```
-
-4. Download [Selenium Server](http://www.seleniumhq.org/download/) and launch it:
-
-    ```
-    java -jar ~/selenium-server-standalone-x.xx.x.jar
-    ```
-
-    In case of using Selenium Server 3.0 with Firefox browser since v48 or Google Chrome since v53 you must download [GeckoDriver](https://github.com/mozilla/geckodriver/releases) or [ChromeDriver](https://sites.google.com/a/chromium.org/chromedriver/downloads) and launch Selenium with it:
-
-    ```
-    # for Firefox
-    java -jar -Dwebdriver.gecko.driver=~/geckodriver ~/selenium-server-standalone-3.xx.x.jar
-    
-    # for Google Chrome
-    java -jar -Dwebdriver.chrome.driver=~/chromedriver ~/selenium-server-standalone-3.xx.x.jar
-    ``` 
-    
-    As an alternative way you can use already configured Docker container with older versions of Selenium and Firefox:
-    
-    ```
-    docker run --net=host selenium/standalone-firefox:2.53.0
-    ```
-
-5. (Optional) Create `yii2basic_test` database and update it by applying migrations if you have them.
-
-   ```
-   tests/bin/yii migrate
-   ```
-
-   The database configuration can be found at `config/test_db.php`.
-
-
-6. Start web server:
-
-    ```
-    tests/bin/yii serve
-    ```
-
-7. Now you can run all available tests
-
-   ```
-   # run all available tests
-   vendor/bin/codecept run
-
-   # run acceptance tests
-   vendor/bin/codecept run acceptance
-
-   # run only unit and functional tests
-   vendor/bin/codecept run unit,functional
-   ```
-
-### Code coverage support
-
-By default, code coverage is disabled in `codeception.yml` configuration file, you should uncomment needed rows to be able
-to collect code coverage. You can run your tests and collect coverage with the following command:
-
-```
-#collect coverage for all tests
-vendor/bin/codecept run --coverage --coverage-html --coverage-xml
-
-#collect coverage only for unit tests
-vendor/bin/codecept run unit --coverage --coverage-html --coverage-xml
-
-#collect coverage for unit and functional tests
-vendor/bin/codecept run functional,unit --coverage --coverage-html --coverage-xml
-```
-
-You can see code coverage output under the `tests/_output` directory.
+[csdn](https://blog.csdn.net/qq_39941141/article/details/124164273)
